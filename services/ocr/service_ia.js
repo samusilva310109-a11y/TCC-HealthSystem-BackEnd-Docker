@@ -1,8 +1,8 @@
 /*******************************************************************************************
- * Objetivo: Realizar a interpretação do texto extraído pelo OCR utilizando IA
- * Autor: Kayque Brenno Ferreira Almeida
- * Data: 16/11/2026
- * Versão: 1.0
+- Objetivo: Realizar a interpretação da receita médica utilizando IA no formato do cadastro
+- Autor: Kayque Brenno Ferreira Almeida
+- Data: 16/11/2026
+- Versão: 2.6
 ********************************************************************************************/
 
 const { GoogleGenAI } = require('@google/genai')
@@ -11,293 +11,286 @@ const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 })
 
-const interpretarReceitaService = async function (texto, catalogos) {
+const aguardar = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+let cacheModelosDisponiveis = null
+let promessaCarregamentoModelos = null
+
+function isCotaDiariaEsgotada(erro) {
+    const mensagem = JSON.stringify(erro || '')
+    return mensagem.includes('PerDay') || mensagem.includes('GenerateRequestsPerDay')
+}
+
+function prioridadeVelocidadeModelo(nome) {
+    if (nome.includes('flash-lite')) return 1
+    if (nome.includes('flash')) return 2
+    if (nome.includes('pro')) return 3
+    return 4
+}
+
+async function obterModelosDisponiveis(aiClient) {
+    if (cacheModelosDisponiveis && cacheModelosDisponiveis.length > 0) {
+        return cacheModelosDisponiveis
+    }
+
+    if (promessaCarregamentoModelos) {
+        return promessaCarregamentoModelos
+    }
+
+    const preferidos = [
+        process.env.GEMINI_MODEL,
+        process.env.GEMINI_FALLBACK_MODEL,
+        'gemini-3.5-flash-lite',
+        'gemini-3.5-flash'
+    ].filter((m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx)
+
+    promessaCarregamentoModelos = (async () => {
+        try {
+            const pager = await aiClient.models.list()
+            const encontrados = []
+
+            for await (const modelo of pager) {
+                const nomeLimpo = String(modelo.name || '').replace(/^models\//, '')
+                const acoes = modelo.supportedActions || modelo.supportedGenerationMethods || []
+                const suportaGeracao = acoes.length === 0 || acoes.includes('generateContent')
+                const especializadoNaoTexto = /(embedding|imagen|veo|tts|aqa|lyria|robotics|computer-use|deep-research|image|audio)/i.test(nomeLimpo)
+
+                if (nomeLimpo.startsWith('gemini-') && suportaGeracao && !especializadoNaoTexto) {
+                    encontrados.push(nomeLimpo)
+                }
+            }
+
+            const ordenados = [
+                ...preferidos.filter((p) => encontrados.includes(p)),
+                ...encontrados
+                    .filter((n) => !preferidos.includes(n) && /(flash|pro)/i.test(n))
+                    .sort((a, b) => {
+                        const diffPrioridade = prioridadeVelocidadeModelo(a) - prioridadeVelocidadeModelo(b)
+                        if (diffPrioridade !== 0) return diffPrioridade
+                        return b.localeCompare(a)
+                    })
+            ]
+
+            if (ordenados.length > 0) {
+                cacheModelosDisponiveis = ordenados
+                console.log('Modelos Gemini disponíveis nesta chave:', cacheModelosDisponiveis)
+                return cacheModelosDisponiveis
+            }
+        } catch (erro) {
+            console.warn('Falha ao listar modelos Gemini:', erro.message)
+        } finally {
+            promessaCarregamentoModelos = null
+        }
+
+        cacheModelosDisponiveis = preferidos
+        return cacheModelosDisponiveis
+    })()
+
+    return promessaCarregamentoModelos
+}
+
+// Pré-carrega a lista ao subir o servidor para não atrasar a 1ª requisição de OCR
+obterModelosDisponiveis(ai).catch(() => {})
+
+async function gerarConteudoComFallback(aiClient, params) {
+    const modelos = [...(await obterModelosDisponiveis(aiClient))]
+    let ultimoErro = null
+
+    for (const modeloAtual of modelos) {
+        let configAtual = { ...params.config }
+
+        for (let tentativa = 1; tentativa <= 2; tentativa++) {
+            try {
+                return await aiClient.models.generateContent({
+                    ...params,
+                    config: configAtual,
+                    model: modeloAtual
+                })
+            } catch (erro) {
+                ultimoErro = erro
+                const status = erro?.status || erro?.error?.code
+
+                if (status === 400 && configAtual.thinkingConfig) {
+                    const { thinkingConfig, ...semThinking } = configAtual
+                    configAtual = semThinking
+                    continue
+                }
+
+                if (status === 404) {
+                    console.warn(`Modelo ${modeloAtual} indisponível (HTTP 404). Removendo do cache e trocando...`)
+                    if (Array.isArray(cacheModelosDisponiveis)) {
+                        cacheModelosDisponiveis = cacheModelosDisponiveis.filter((m) => m !== modeloAtual)
+                    }
+                    break
+                }
+
+                if (status === 429 && isCotaDiariaEsgotada(erro)) {
+                    console.warn(`Cota diária esgotada em ${modeloAtual} (HTTP 429). Trocando de modelo...`)
+                    break
+                }
+
+                if ((status === 503 || status === 429) && tentativa < 2) {
+                    const tempoEspera = 1500 + Math.floor(Math.random() * 500)
+                    console.warn(`Gemini (${modeloAtual}) ocupado (HTTP ${status}). Nova tentativa em ${tempoEspera}ms...`)
+                    await aguardar(tempoEspera)
+                    continue
+                }
+
+                break
+            }
+        }
+    }
+
+    throw ultimoErro
+}
+
+const interpretarReceitaService = async function (imagem, catalogos) {
     try {
-        if (!texto || !catalogos)
+        if (!imagem || !imagem.buffer || !catalogos)
             return false
 
-        const resposta = await ai.models.generateContent({
-            model: 'gemini-3.5-flash-lite',
+        const tiposDosagemResumo = catalogos.tipos_dosagem.map(({ id, tipo_dosagem }) => ({ id, tipo_dosagem }))
+        const unidadesMedidaResumo = catalogos.unidades_medida.map(({ id, unidade_medida, sigla }) => ({ id, unidade_medida, sigla }))
+        const tiposIntervaloResumo = catalogos.tipos_intervalo.map(({ id, tipo_intervalo }) => ({ id, tipo_intervalo }))
 
-            contents: `
-Você é responsável por interpretar receitas médicas para o aplicativo MedTime,
+        const prompt = `
+Você é responsável por interpretar receitas médicas (impressas ou manuscritas) para o aplicativo MedTime,
 utilizado também por pessoas idosas.
 
-Sua tarefa é identificar os medicamentos, extrair as informações da receita
-e relacionar os tipos de dosagem, unidades de medida e intervalos aos IDs
-disponibilizados pelo sistema.
+Sua tarefa é analisar a imagem da receita, identificar os medicamentos, extrair as informações prescritas
+e montar cada item exatamente na estrutura JSON de cadastro do sistema, relacionando os IDs dos catálogos fornecidos.
 
-O texto foi obtido por OCR e pode conter erros de reconhecimento,
-palavras incompletas, abreviações e informações ilegíveis.
+REGRAS ESPECÍFICAS PARA RECEITAS MANUSCRITAS:
+- Analise cuidadosamente a caligrafia médica, considerando abreviações clínicas comuns no Brasil:
+  - Vias: "VO" (via oral), "SL" (sublingual), "IM", "EV", "tópico".
+  - Formas: "cp" / "comp" (comprimido), "caps" (cápsula), "gts" (gotas), "fr" (frasco), "cx" (caixa), "amp" (ampola), "env" (envelope).
+  - Posologia: "8/8h" (frequencia = 8, intervalo = hora), "12/12h" (12 horas), "6/6h" (6 horas), "1x/dia" ou "1x ao dia" (1 dia), "2x/dia" (12 horas), "3x/dia" (8 horas).
+- Se uma palavra manuscrita estiver borrada, ilegível ou ambígua (ex.: dúvida entre dois medicamentos diferentes), NÃO adivinhe: retorne null no campo correspondente.
 
 REGRAS OBRIGATÓRIAS:
-
 1. Extraia somente informações relacionadas aos medicamentos.
-
-2. Nunca invente medicamentos, concentrações, doses, frequências,
-   quantidades ou durações.
-
-3. Se uma informação não puder ser identificada com segurança,
-   retorne null no campo correspondente.
-
-4. Utilize exclusivamente os IDs existentes nos catálogos fornecidos.
-
-5. Nunca invente IDs ou utilize IDs que não estejam nas listas.
-
-6. Identifique o tipo de dosagem correspondente à apresentação
-   descrita na receita.
-
-7. Você pode corrigir erros evidentes de OCR na apresentação,
-   como "cumprimido" para "comprimido", quando o contexto
-   permitir identificar a correspondência com segurança.
-
-8. Não presuma que um medicamento existe somente em uma
-   apresentação. Utilize as informações presentes na receita.
-
-9. Identifique a concentração do medicamento separando
-   o valor numérico da unidade de medida.
-   Exemplo: "500 mg" corresponde à concentração 500
-   e à unidade de medida mg.
-
-10. Não confunda concentração com quantidade administrada.
-    Exemplo: "Amoxilina 500 mg, tomar 1 comprimido":
-    concentracao = 500
-    dosagem = 1
-
-11. Identifique a unidade de medida utilizada na administração.
-    Exemplos:
-    - 1 comprimido = unidade correspondente a "un"
-    - 2 cápsulas = unidade correspondente a "un"
-    - 5 mL = unidade correspondente a "ml"
-    - 10 gotas = unidade correspondente a "gt"
-
-12. Utilize o ID da unidade de medida correspondente,
-    somente quando a equivalência estiver clara.
-
-13. Identifique a frequência e o tipo de intervalo separadamente.
-
-14. Quando a receita informar "a cada 8 horas":
-    frequencia = 8
-    id_tipo_intervalo = ID correspondente a "hora".
-
-15. Quando a receita informar "a cada 2 dias":
-    frequencia = 2
-    id_tipo_intervalo = ID correspondente a "dia".
-
-16. Quando houver uma frequência diária claramente equivalente
-    a intervalos regulares, você pode normalizá-la:
-    - uma vez ao dia = 1 dia
-    - duas vezes ao dia = 12 horas
-    - três vezes ao dia = 8 horas
-    - quatro vezes ao dia = 6 horas
-
-17. Expressões como "pela manhã" ou "à noite" não indicam
-    um horário exato. Não invente horários de administração.
-
-18. Expressões como "pela manhã e à noite" indicam dois
-    períodos do dia, mas não garantem intervalos exatos
-    de 12 horas. Não converta automaticamente essa expressão
-    em uma frequência de 12 horas.
-
-19. Se a receita informar apenas "se necessário",
-    "se houver dor" ou outra condição sem intervalo,
-    retorne null para frequencia e id_tipo_intervalo.
-
-20. Se houver um intervalo explícito acompanhado de condição,
-    mantenha o intervalo informado.
-    Exemplo: "a cada 6 horas se necessário".
-
-21. Identifique a quantidade total de medicamento prescrita
-    para dispensação, quando estiver explicitamente informada.
-
-    Exemplos:
-    - "21 comprimidos" = quantidade_prescrita 21
-    - "30 cápsulas" = quantidade_prescrita 30
-    - "1 frasco" = quantidade_prescrita null,
-      caso não seja possível identificar seu conteúdo
-      na unidade de estoque utilizada pelo sistema.
-
-22. Não confunda a quantidade total prescrita com a
-    quantidade administrada em cada dose.
-
-    Exemplo:
-    "Amoxilina 500 mg - 21 comprimidos.
-     Tomar 1 comprimido a cada 8 horas."
-
-    concentracao = 500
-    dosagem = 1
-    quantidade_prescrita = 21
-
-23. A quantidade_prescrita deve ser extraída somente
-    quando estiver explicitamente informada na receita.
-
-    Nunca calcule a quantidade prescrita utilizando
-    a frequência ou a duração do tratamento.
-
-    Nunca considere quantidade_prescrita como
-    quantidade_em_estoque.
-
-24. A dosagem deve representar a quantidade administrada
-    por vez, utilizando a unidade correspondente.
-
-25. Se a receita informar "1 a 2 comprimidos",
-    não escolha arbitrariamente uma quantidade.
-    Retorne null para dosagem.
-
-26. Não altere nomes de medicamentos apenas por semelhança
-    com nomes conhecidos. Preserve o nome identificável
-    na receita.
-
-27. Identifique informações complementares presentes
-    na receita, como via de administração, condições
-    de uso e duração expressamente prescrita.
-
-    Preserve essas orientações no campo descricao,
-    sem criar campos adicionais ou inventar informações.
-
-28. Não presuma que uma apresentação seja injetável,
-    oral ou tópica apenas pelo nome do medicamento.
-
-29. Uma receita pode conter vários medicamentos.
-    Identifique todos os medicamentos reconhecíveis.
-
-30. Ignore informações administrativas, como nome do
-    paciente, endereço, CRM, hospital e prontuário.
-
-31. Quando não existir um registro correspondente
-    nos catálogos, retorne null para o ID.
-
-32. Se houver duas ou mais correspondências plausíveis
-    para uma informação, retorne null para o ID.
-
-33. A segurança do paciente tem prioridade sobre o
-    preenchimento automático. Em caso de dúvida,
-    não complete informações clínicas por suposição.
+2. Nunca invente medicamentos, concentrações, doses, frequências ou durações.
+3. Se uma informação não puder ser identificada com segurança, retorne null no campo correspondente.
+4. Utilize exclusivamente os IDs existentes nos catálogos fornecidos. Nunca invente IDs.
+5. Em "medicamento":
+   - "nome": nome do princípio ativo ou comercial (ou null).
+   - "imagem": sempre null.
+   - "concentracao": valor numérico da concentração (ex.: "500 mg" -> 500).
+   - "id_unidade_medida_embalagem": ID correspondente à unidade da concentração (ex.: "mg").
+   - "id_tipo_dosagem": ID correspondente à forma farmacêutica (ex.: Comprimido, Gotas, Cápsula).
+6. Em "estoque":
+   - "quantidade_em_estoque": sempre null (será informado pelo usuário no aplicativo).
+7. Em "receita_medica":
+   - "dosagem": quantidade tomada por vez (não confunda com concentração; ex.: "Amoxicilina 500 mg, tomar 1 comprimido" -> concentracao = 500, dosagem = 1). Se informar "1 a 2 comprimidos", retorne null.
+   - "id_unidade_medida": ID correspondente à unidade da dose administrada (comprimido/cápsula -> ID de "un", mL -> ID de "ml", gotas -> ID de "gt").
+   - "descricao": orientações complementares (via, duração como "por 7 dias", condições de uso) ou null se não houver.
+8. Em "programacao_medicamento":
+   - "frequencia": intervalo numérico entre doses.
+   - "id_tipo_intervalo": ID correspondente ao intervalo (ex.: hora, dia). Expressões vagas como "pela manhã", "à noite" ou "se necessário" sem intervalo exato devem retornar null em frequencia e id_tipo_intervalo.
+   - "data_hora_inicio": sempre null (será escolhido pelo usuário no aplicativo).
+9. Ignore dados administrativos (paciente, endereço, CRM, hospital, data).
+10. A segurança do paciente tem prioridade sobre o preenchimento automático. Em caso de dúvida, retorne null.
 
 CATÁLOGOS DISPONÍVEIS NO MEDTIME:
+Tipos de dosagem: ${JSON.stringify(tiposDosagemResumo)}
+Unidades de medida: ${JSON.stringify(unidadesMedidaResumo)}
+Tipos de intervalo: ${JSON.stringify(tiposIntervaloResumo)}
+`
 
-Tipos de dosagem:
-${JSON.stringify(catalogos.tipos_dosagem)}
-
-Unidades de medida:
-${JSON.stringify(catalogos.unidades_medida)}
-
-Tipos de intervalo:
-${JSON.stringify(catalogos.tipos_intervalo)}
-
-Utilize os nomes, as siglas e os IDs desses catálogos
-para identificar as correspondências.
-
-O MedTime utiliza programações contínuas de medicamentos.
-
-Não crie campos específicos para duração do tratamento,
-como duracao_dias ou data_fim.
-
-Se houver uma duração expressamente prescrita,
-preserve essa informação somente em descricao.
-
-Identifique somente a frequência e o tipo de intervalo
-informados na receita.
-
-Não invente horários ou datas de início.
-
-Não transforme expressões como "por 7 dias" em
-frequência ou data de término.
-
-TEXTO EXTRAÍDO DA RECEITA:
-
-${texto}
-            `,
-
+        const resposta = await gerarConteudoComFallback(ai, {
+            contents: [
+                {
+                    inlineData: {
+                        data: imagem.buffer.toString('base64'),
+                        mimeType: imagem.mimetype
+                    }
+                },
+                prompt
+            ],
             config: {
+                temperature: 0.1,
+                maxOutputTokens: 1024,
+                thinkingConfig: {
+                    thinkingLevel: 'MINIMAL'
+                },
                 responseMimeType: 'application/json',
-
                 responseSchema: {
                     type: 'object',
-
                     properties: {
                         medicamentos: {
                             type: 'array',
-
                             items: {
                                 type: 'object',
-
                                 properties: {
                                     medicamento: {
-                                        type: 'string',
-                                        nullable: true
+                                        type: 'object',
+                                        properties: {
+                                            nome: { type: 'string', nullable: true },
+                                            imagem: { type: 'string', nullable: true },
+                                            concentracao: { type: 'number', nullable: true },
+                                            id_unidade_medida_embalagem: { type: 'integer', nullable: true },
+                                            id_tipo_dosagem: { type: 'integer', nullable: true }
+                                        },
+                                        required: [
+                                            'nome',
+                                            'imagem',
+                                            'concentracao',
+                                            'id_unidade_medida_embalagem',
+                                            'id_tipo_dosagem'
+                                        ]
                                     },
-
-                                    concentracao: {
-                                        type: 'number',
-                                        nullable: true
+                                    estoque: {
+                                        type: 'object',
+                                        properties: {
+                                            quantidade_em_estoque: { type: 'integer', nullable: true }
+                                        },
+                                        required: ['quantidade_em_estoque']
                                     },
-
-                                    id_unidade_medida_embalagem: {
-                                        type: 'integer',
-                                        nullable: true
+                                    receita_medica: {
+                                        type: 'object',
+                                        properties: {
+                                            dosagem: { type: 'number', nullable: true },
+                                            id_unidade_medida: { type: 'integer', nullable: true },
+                                            descricao: { type: 'string', nullable: true }
+                                        },
+                                        required: [
+                                            'dosagem',
+                                            'id_unidade_medida',
+                                            'descricao'
+                                        ]
                                     },
-
-                                    id_tipo_dosagem: {
-                                        type: 'integer',
-                                        nullable: true
-                                    },
-
-                                    dosagem: {
-                                        type: 'number',
-                                        nullable: true
-                                    },
-
-                                    id_unidade_medida: {
-                                        type: 'integer',
-                                        nullable: true
-                                    },
-
-                                    frequencia: {
-                                        type: 'number',
-                                        nullable: true
-                                    },
-
-                                    id_tipo_intervalo: {
-                                        type: 'integer',
-                                        nullable: true
-                                    },
-
-                                    quantidade_prescrita: {
-                                        type: 'number',
-                                        nullable: true
-                                    },
-
-                                    descricao: {
-                                        type: 'string',
-                                        nullable: true
+                                    programacao_medicamento: {
+                                        type: 'object',
+                                        properties: {
+                                            frequencia: { type: 'number', nullable: true },
+                                            id_tipo_intervalo: { type: 'integer', nullable: true },
+                                            data_hora_inicio: { type: 'string', nullable: true }
+                                        },
+                                        required: [
+                                            'frequencia',
+                                            'id_tipo_intervalo',
+                                            'data_hora_inicio'
+                                        ]
                                     }
                                 },
-
                                 required: [
                                     'medicamento',
-                                    'concentracao',
-                                    'id_unidade_medida_embalagem',
-                                    'id_tipo_dosagem',
-                                    'dosagem',
-                                    'id_unidade_medida',
-                                    'frequencia',
-                                    'id_tipo_intervalo',
-                                    'quantidade_prescrita',
-                                    'descricao'
+                                    'estoque',
+                                    'receita_medica',
+                                    'programacao_medicamento'
                                 ]
                             }
                         }
                     },
-
-                    required: [
-                        'medicamentos'
-                    ]
+                    required: ['medicamentos']
                 }
             }
         })
 
-        let medicamentos = JSON.parse(resposta.text)
+        if (!resposta || !resposta.text)
+            return false
+
+        const medicamentos = JSON.parse(resposta.text)
 
         if (medicamentos && Array.isArray(medicamentos.medicamentos))
             return medicamentos
@@ -305,7 +298,7 @@ ${texto}
             return false
 
     } catch (error) {
-        console.log(error)
+        console.log('Erro no interpretarReceitaService:', error)
         return false
     }
 }

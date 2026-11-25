@@ -35,6 +35,8 @@ const receitaMedicaSchema = JOI.object({
                 .required(),
 
     descricao: JOI.string()
+                .allow('', null)
+                .optional()
 })
 
 module.exports = receitaMedicaSchema

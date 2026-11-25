@@ -29,9 +29,12 @@ const insertMedicamento = async function (medicamentos, transaction = null) {
             return result[0][0][0].id
         else
             return false
+
     } catch (error) {
+        console.error('ERRO AO INSERIR MEDICAMENTO NO MODEL:', error)
         return false
     }
+
 }
 
 const updateMedicamento = async function (medicamentos, transaction = null) {

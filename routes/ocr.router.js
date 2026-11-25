@@ -2,7 +2,7 @@
     Objetivo: Arquivo responsável pela ROTA
     data: 16/11/2026
     Autor: Kayque Brenno Ferreira Almeida
-    Versão: 1.0
+    Versão: 1.1
 *************************************************/
 
 const express = require('express')
@@ -18,7 +18,7 @@ const authorization = require('../middleware/authorization.js')
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 5 * 1024 * 1024
+        fileSize: 10 * 1024 * 1024
     }
 })
 
@@ -32,6 +32,26 @@ router.post('/:idUsuario', verificarToken.verificarToken,
         let imagem = request.file
 
         let result = await controllerOCR.processarReceitaMedica(imagem)
+
+        response.status(result.status_code)
+        response.json(result)
+    }
+)
+
+router.post('/:idUsuario/cadastrar', verificarToken.verificarToken,
+    authorization.verficarPermissao('CADASTRAR_MEDICAMENTOS'),
+    authorization.verificarRelacao(),
+    async function (request, response) {
+
+        let idUsuario = request.idPacienteAutorizado
+        let contentType = request.headers['content-type']
+        let medicamentos = request.body?.medicamentos
+
+        let result = await controllerOCR.cadastrarMedicamentosOcr(
+            idUsuario,
+            medicamentos,
+            contentType
+        )
 
         response.status(result.status_code)
         response.json(result)

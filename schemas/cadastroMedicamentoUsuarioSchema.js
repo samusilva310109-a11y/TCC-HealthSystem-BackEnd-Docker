@@ -56,6 +56,7 @@ const cadastroMedicamentoUsuarioSchema = JOI.object({
 
         descricao: JOI.string()
                     .allow('', null)
+                    .optional()
     }).required(),
 
     // Dados da programação do medicamento
