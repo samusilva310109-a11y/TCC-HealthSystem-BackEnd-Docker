@@ -5,7 +5,7 @@ module.exports = {
         // ⚠️ ALTERAÇÃO: Define o cliente como 'mysql2'
         client: 'mysql2',
         connection: {
-            host: process.env.HOST_DB,
+            host: process.env.HOST_DB || 'localhost',
             user: process.env.USER_DB, // Substitua pelo seu usuário
             password: process.env.PASSWORD_DB, // Substitua pela sua senha
             database: process.env.NAME_DB,

@@ -1,0 +1,34 @@
+services:
+    db:
+      image:  mysql:8.0
+      container_name: medtime_banco
+      restart: always
+      environment: 
+        - MYSQL_ROOT_PASSWORD=${PASSWORD_DB}
+        - MYSQL_DATABASE=${NAME_DB}
+        - MYSQL_ROOT_HOST=%
+      ports:
+        - "3307:3306"
+      volumes:
+        - mysql_data:/var/lib/mysql
+        - .db-scripts:/docker-entrypoint-initdb.d
+      healthcheck:
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${PASSWORD_DB}"]
+        interval: 5s
+        timeout: 10s
+        retries: 10
+    api: 
+      build: .
+      container_name: medtime_api
+      restart: always
+      ports:
+        - "8080:8080"
+      env_file:
+        - .env
+      environment:
+      - HOST_DB=db
+      depends_on:
+        db:
+          condition: service_healthy
+volumes:
+  mysql_data:
