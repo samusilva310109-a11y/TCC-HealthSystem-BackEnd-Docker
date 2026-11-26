@@ -1,4 +1,3 @@
-create database db_medtime;
 
 use db_medtime;
 

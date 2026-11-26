@@ -37,7 +37,7 @@ BEGIN
         set message_text = 'Operação inválida na procTipoIntervalo';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== CONTATOS DE EMERGENCIA ========
 DELIMITER $$
@@ -79,7 +79,7 @@ BEGIN
         set message_text = 'Operação inválida na procContatoEmergencia';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== CONTATOS DE EMERGENCIA USUARIOS ========
 DELIMITER $$
@@ -150,7 +150,7 @@ BEGIN
         set message_text = 'Operação inválida na procContatoEmergenciaUsuarios';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== DOENÇAS CRONICAS ========
 DELIMITER $$
@@ -188,7 +188,7 @@ BEGIN
         set message_text = 'Operação inválida na procDoencaCronica';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== PERMISSOES ========
 DELIMITER $$
@@ -226,7 +226,7 @@ BEGIN
         set message_text = 'Operação inválida na procPermissoes';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== ROLE ========
 DELIMITER $$
@@ -264,7 +264,7 @@ BEGIN
         set message_text = 'Operação inválida na procRole';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== TIPO DOSAGEM ========
 DELIMITER $$
@@ -302,7 +302,7 @@ BEGIN
         set message_text = 'Operação inválida na procTipoDosagem';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== UNIDADE MEDIDA ========
 DELIMITER $$
@@ -344,7 +344,7 @@ BEGIN
         set message_text = 'Operação inválida na procUnidadeMedida';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== MEDICAMENTO ========
 DELIMITER $$
@@ -446,7 +446,7 @@ BEGIN
         set message_text = 'Operação inválida na procMedicamento';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== ESTOQUE ========
 DELIMITER $$
@@ -591,7 +591,7 @@ BEGIN
         set message_text = 'Operação inválida na procEstoque';
 	end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== HISTORICO MEDICAMENTO ========
 DELIMITER $$
@@ -732,22 +732,7 @@ BEGIN
         set message_text = 'Operação inválida na procHistoricoMedicamento';
     end if;
 END $$
-DELIMITER $$
-
-select * from tbl_historico_medicamento;
-
-select
-    TABLE_NAME,
-    COLUMN_NAME,
-    CONSTRAINT_NAME,
-    REFERENCED_TABLE_NAME,
-    REFERENCED_COLUMN_NAME
-from information_schema.KEY_COLUMN_USAGE
-where TABLE_SCHEMA = 'db_medtime'
-    and REFERENCED_TABLE_NAME is not null
-order by TABLE_NAME;
-
-use db_medtime;
+DELIMITER ;
 
 -- ======== USUARIOS ========
 DELIMITER $$
@@ -853,7 +838,7 @@ BEGIN
         set message_text = 'Operação inválida na procUsuario';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== ROLE PERMISSOES ========
 DELIMITER $$
@@ -918,7 +903,7 @@ BEGIN
         set message_text = 'Operação inválida na procRolePermissoes';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== USUARIOS ROLE ========
 DELIMITER $$
@@ -1007,7 +992,7 @@ BEGIN
         set message_text = 'Operação inválida na procUsuariosRole';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== VINCULO PACIENTE ========
 DELIMITER $$
@@ -1158,7 +1143,7 @@ BEGIN
         set message_text = 'Operação inválida na procVinculoPaciente';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== CODIGO DE VERIFICACAO ========
 DELIMITER $$
@@ -1276,7 +1261,7 @@ BEGIN
         set message_text = 'Operação inválida na procCodigoVerificacao';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== RECEITA MEDICA ========
 DELIMITER $$
@@ -1413,8 +1398,7 @@ BEGIN
         set message_text = 'Operação inválida na procReceitaMedica';
     end if;
 END $$
-DELIMITER $$
-
+DELIMITER ;
 
 -- ======== PROGRAMACAO MEDICAMENTO ========
 DELIMITER $$
@@ -1584,7 +1568,6 @@ BEGIN
 		where tbl_usuarios.id = id_param
 		order by tbl_programacao_medicamento.data_hora_inicio desc;
 
-
     elseif operacao = 'DELETE' then
         delete from tbl_programacao_medicamento
         where id = id_param;
@@ -1596,7 +1579,7 @@ BEGIN
         set message_text = 'Operação inválida na procProgramacaoMedicamento';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== DOENCA CRONICA USUARIO ========
 DELIMITER $$
@@ -1667,7 +1650,7 @@ BEGIN
         set message_text = 'Operação inválida na procDoencaCronicaUsuario';
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
 
 -- ======== USUARIO GOOGLE ========
 DELIMITER $$
@@ -1713,4 +1696,4 @@ BEGIN
 
     end if;
 END $$
-DELIMITER $$
+DELIMITER ;
